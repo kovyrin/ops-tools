@@ -45,18 +45,6 @@ class MySQL
     conn # connect
   end
 
-  def free
-    @conn.close if @conn
-    @conn = nil
-  end
-
-  def select_value(sql)
-    conn.query(sql) do |res|
-      row = res.fetch_row
-      return (row ? row.first : nil)
-    end
-  end
-
   def select_row(sql)
     conn.query(sql) do |res|
       return res.fetch_hash
