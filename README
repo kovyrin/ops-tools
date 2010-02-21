@@ -3,3 +3,4 @@ Useful tools for ops
 
 long-transaction-killer: lists and kills long transactions on a specified MySQL server
 long-query-killer: lists and kills long running queries on a specified MySQL server
+kill-huge-app-instances: kills passenger instances that grew to large over time

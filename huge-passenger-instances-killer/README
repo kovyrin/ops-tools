@@ -1,0 +1,7 @@
+kill-huge-app-instances: kills passenger instances that grew to large over time
+
+Algorithm:
+
+1) Find all large processes (rss > TRESHOLD || vsz > TRESHOLD * 2)
+2) Send SIGUSR1 to each query we need to stop
+3) KILL all queries that didn't stop in WAIT_TIME seconds (if any)

@@ -1,0 +1,59 @@
+#!/usr/bin/env ruby
+
+#
+# kill-huge-app-instances: kills passenger instances that grew to large over time
+#
+
+TRESHOLD = 400000 # 400Mb RSS or 800Mb VSZ
+WAIT_TIME = 5 # seconds
+
+# Check if process is still running
+def running?(pid)
+  begin
+    Process.kill(0, pid)
+    return true
+  rescue Errno::ESRCH
+    return false
+  rescue ::Exception   # for example on EPERM (process exists but does not belong to us)
+    return true
+  #rescue Errno::EPERM
+  #  return false
+  end
+end
+
+#-------------------------------------------------------------------------------------------
+# Get all passenger processes
+ps = IO.popen('ps axuww | egrep "(passenger \[.*\]|Rack):" | grep -v grep') { |p| p.readlines }
+
+# Figure out ones we need to stop
+to_kill = []
+ps.each do |line|
+  (user, pid, cpu, mem, vsz, rss, tty, stat, start, time, command) = line.split(/[\t ]+/)
+  pid = pid.to_i
+  to_kill << pid if rss.to_i > TRESHOLD || vsz.to_i > TRESHOLD * 2
+end
+
+# Exit if there are no processes to stop
+exit(0) unless to_kill.any?
+
+# Send SIGUSR1 to all passengers and wait until all processes die or until it is time to kill them
+print "Stopping #{to_kill.inspect}: "
+to_kill.each { |x| Process.kill('USR1', x) rescue nil }
+
+start_time = Time.now.to_f
+while (to_kill.any? && Time.now.to_f - start_time < WAIT_TIME)
+  to_kill.delete_if { |pid| !running?(pid) }
+  sleep(0.5)
+  print "."
+end
+puts " Done!"
+
+# If some processes didn't die, kill them
+if to_kill.any?
+  print "Killing #{to_kill.inspect}: "
+  to_kill.each { |x| Process.kill('KILL', x) }
+  puts "Done!"
+end
+
+# Done!
+exit(0)
