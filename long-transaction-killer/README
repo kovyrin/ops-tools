@@ -1,0 +1,10 @@
+$ ./long-transaction-killer -h server -u killer -pblah -t 1000 -k
+TRANSACTION 5CECF52E
+ - Active for 1104 sec
+ - MYSQL thread 2077054
+ - User: blah_rw
+ - Host: 10.16.12.238:43785
+ - Database: blah_production
+ - Process command: Sleep
+ - Process time: 1105
+KILLING PROCESS 2077054, TRANSACTION 5CECF52E!

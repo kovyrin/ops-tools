@@ -1,0 +1,223 @@
+#!/usr/bin/env ruby
+
+# == Synopsis
+# 
+# long-transaction-killer: lists and kills long transactions on a specified MySQL server
+#
+# == Usage
+#
+# long-transaction-killer [OPTIONS]
+#
+# -?, --help:
+#   show help
+# -h, --host:
+#   set connection host (default: localhost)
+# -u, --user:
+#   set connection user (default: root)
+# -p, --password:
+#   set connection password (default: blank)
+# -l, --list:
+#   list long transactions only (default: enabled)
+# -k, --kill:
+#   kill long transactions
+# -t, --time:
+#   define long transactions max time in seconds (default: 3600)
+# -w, --whitelist:
+#   define whitelisted users (comma-separated list, default: root)
+#
+
+require 'rubygems'
+require 'mysql'
+require 'getoptlong'
+require 'rdoc/usage'
+
+RDoc::usage if $ARGV.size.zero?
+
+#-------------------------------------------------------------------------------------------
+
+# MySQL connection wrapper, make it easier to work with MySQL api
+class MySQL
+  def initialize(config)
+    @host = config[:host] || 'localhost'
+    @user = config[:user] || 'root'
+    @password = config[:password] || ''
+    @database = config[:database] || 'mysql'
+    conn # connect
+  end
+
+  def free
+    @conn.close if @conn
+    @conn = nil
+  end
+
+  def select_value(sql)
+    conn.query(sql) do |res|
+      row = res.fetch_row
+      return (row ? row.first : nil)
+    end
+  end
+
+  def select_row(sql)
+    conn.query(sql) do |res|
+      return res.fetch_hash
+    end
+  end
+
+  def select_all(sql)
+    results = []
+
+    conn.query(sql) do |res|
+      while (row = res.fetch_hash) do
+        results << row
+      end
+    end
+
+    return results
+  end
+
+  def execute(sql)
+    conn.query(sql)
+  end
+  
+private
+
+  def conn
+    if @conn
+      @conn.ping
+      return @conn
+    end
+
+    @conn = Mysql.new(@host, @user, @password, @database)
+    @conn.reconnect = true
+
+    return @conn 
+  end
+end
+
+#-------------------------------------------------------------------------------------------
+
+@debug = false
+def debug(message)
+  puts message if @debug
+end
+
+#-------------------------------------------------------------------------------------------
+
+def parse_transactions_data(innodb_status, processlist)
+  # Convert processlist to a hash: id => process
+  processes = processlist.inject({}) { |hsh, p| hsh[p['Id'].to_i] = p; hsh }
+  
+  # Parse innodb status
+  transactions = []
+  lines = innodb_status['Status'].split(/\n/)
+  
+  while lines.size > 0
+    line = lines.shift # get a line
+    
+    # if the line is a transaction header, parse it
+    if m = line.match(/^---TRANSACTION (.*?), ACTIVE (\d+) sec/)
+      t = { :id => m[1], :active => m[2].to_i }
+      
+      # find the line with mysql process id
+      while(line = lines.shift)
+        if m = line.match(/^MySQL thread id (\d+)/)
+          t[:process_id] = m[1].to_i
+          t[:process] = processes[t[:process_id]]
+          break
+        end
+      end 
+
+      # save transaction
+      transactions << t
+    end
+  end
+  
+  return transactions
+end
+
+#-------------------------------------------------------------------------------------------
+
+def print_transaction(t)
+  puts "TRANSACTION #{t[:id]}"
+  puts " - Active for #{t[:active]} sec"
+  puts " - MYSQL thread #{t[:process_id]}"
+  puts " - User: #{t[:process]['User']}"
+  puts " - Host: #{t[:process]['Host']}"
+  puts " - Database: #{t[:process]['db']}"
+  puts " - Process command: #{t[:process]['Command']}"
+  puts " - Process time: #{t[:process]['Time']}"
+  puts " - Process state: #{t[:process]['State']}" if t[:process]['State'].to_s != ''
+  puts " - Process info: #{t[:process]['Info']}" if t[:process]['Info'].to_s != ''
+end
+
+def kill_transaction(t, db)
+  puts "KILLING PROCESS #{t[:process_id]}, TRANSACTION #{t[:id]}!"
+  db.execute("KILL #{t[:process_id]}")
+end
+
+#-------------------------------------------------------------------------------------------
+
+opts = GetoptLong.new(
+  [ '--help', '-?', GetoptLong::NO_ARGUMENT ],
+  [ '--host', '-h', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--user', '-u', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--password', '-p', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--kill', '-k', GetoptLong::NO_ARGUMENT ],
+  [ '--list', '-l', GetoptLong::NO_ARGUMENT ],
+  [ '--time', '-t', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--verbose', '-v', GetoptLong::NO_ARGUMENT ]
+)
+
+config = { :list => true, :whitelist => ['root'], :time => 3600 }
+begin
+  opts.each do |opt, arg|
+    case opt
+    when '--help'
+      RDoc::usage
+    when '--host'
+      config[:host] = arg
+    when '--user'
+      config[:user] = arg
+    when '--password'
+      config[:password] = arg
+    when '--list'
+      config[:list] = true
+    when '--kill'
+      config[:kill] = true
+    when '--time'
+      config[:time] = arg.to_i
+      raise GetoptLong::InvalidOption, "Invalid time value (should be > 1)" if config[:time] < 1
+    when '--whitelist'
+      config[:whitelist] += arg.split(/\s*,\s*/)
+      config[:whitelist].uniq!
+    when '--verbose'
+      @debug = true
+    end
+  end
+rescue GetoptLong::InvalidOption => e
+  puts "ERROR: #{e}"
+  RDoc::usage
+end
+debug "Config after parsing params: #{config.inspect}"
+
+#-------------------------------------------------------------------------------------------
+debug "Connecting to mysql..."
+db = MySQL.new(config)
+
+debug "Fetching transactions..."
+innodb_status = db.select_row("SHOW INNODB STATUS")
+
+debug "Fetching processlist..."
+processlist = db.select_all("SHOW PROCESSLIST")
+
+debug "Parsing transactions data..."
+transactions = parse_transactions_data(innodb_status, processlist)
+
+debug "Analyzing transactions..."
+transactions.each do |t|
+  next if t[:active] <= config[:time]
+  next if config[:whitelist].member?(t[:process]['User'])
+  print_transaction(t)
+  kill_transaction(t, db) if config[:kill]
+  puts
+end
