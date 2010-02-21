@@ -153,6 +153,7 @@ opts = GetoptLong.new(
   [ '--kill', '-k', GetoptLong::NO_ARGUMENT ],
   [ '--list', '-l', GetoptLong::NO_ARGUMENT ],
   [ '--time', '-t', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--whitelist', '-w', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--verbose', '-v', GetoptLong::NO_ARGUMENT ]
 )
 

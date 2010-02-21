@@ -118,6 +118,7 @@ opts = GetoptLong.new(
   [ '--list', '-l', GetoptLong::NO_ARGUMENT ],
   [ '--time', '-t', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--query-types', '-q', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--whitelist', '-w', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--verbose', '-v', GetoptLong::NO_ARGUMENT ]
 )
 
