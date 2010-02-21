@@ -1,0 +1,3 @@
+Useful tools for ops
+
+long-transaction-killer: lists and kills long transactions on a specified MySQL server
