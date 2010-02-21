@@ -1,0 +1,182 @@
+#!/usr/bin/env ruby
+
+# == Synopsis
+# 
+# long-query-killer: lists and kills long running queries on a specified MySQL server
+#
+# == Usage
+#
+# long-query-killer [OPTIONS]
+#
+# -?, --help:
+#   show help
+# -h, --host:
+#   set connection host (default: localhost)
+# -u, --user:
+#   set connection user (default: root)
+# -p, --password:
+#   set connection password (default: blank)
+# -l, --list:
+#   list long queries only (default: enabled)
+# -k, --kill:
+#   kill long queries
+# -t, --time:
+#   define long transactions max time in seconds (default: 90)
+# -w, --whitelist:
+#   define whitelisted users (comma-separated list, default: root)
+# -q, --query-types
+#   define query types to kill (comma-separate list, default: select)
+#
+
+require 'rubygems'
+require 'mysql'
+require 'getoptlong'
+require 'rdoc/usage'
+
+RDoc::usage if $ARGV.size.zero?
+
+#-------------------------------------------------------------------------------------------
+
+# MySQL connection wrapper, make it easier to work with MySQL api
+class MySQL
+  def initialize(config)
+    @host = config[:host] || 'localhost'
+    @user = config[:user] || 'root'
+    @password = config[:password] || ''
+    @database = config[:database] || 'mysql'
+    conn # connect
+  end
+
+  def select_all(sql)
+    results = []
+
+    conn.query(sql) do |res|
+      while (row = res.fetch_hash) do
+        results << row
+      end
+    end
+
+    return results
+  end
+
+  def execute(sql)
+    conn.query(sql)
+  end
+  
+private
+
+  def conn
+    if @conn
+      @conn.ping
+      return @conn
+    end
+
+    @conn = Mysql.new(@host, @user, @password, @database)
+    @conn.reconnect = true
+
+    return @conn 
+  end
+end
+
+#-------------------------------------------------------------------------------------------
+
+@debug = false
+def debug(message)
+  puts message if @debug
+end
+
+#-------------------------------------------------------------------------------------------
+
+# FIXME: Make it smarter to remove comments, etc from the beggining of the query
+def query_type(query)
+  query.strip.split(/\s+/).first.downcase
+end
+
+def print_process(p)
+  puts "PROCESS #{p['Id']}:"
+  puts " - User: #{p['User']}"
+  puts " - Host: #{p['Host']}"
+  puts " - Database: #{p['db']}"
+  puts " - Time: #{p['Time']}"
+  puts " - State: #{p['State']}"
+  puts " - Query: #{p['Info']}"
+end
+
+def kill_process(process_id, db)
+  puts "KILLING PROCESS #{process_id}!"
+  db.execute("KILL #{process_id}")
+end
+
+#-------------------------------------------------------------------------------------------
+
+opts = GetoptLong.new(
+  [ '--help', '-?', GetoptLong::NO_ARGUMENT ],
+  [ '--host', '-h', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--user', '-u', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--password', '-p', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--kill', '-k', GetoptLong::NO_ARGUMENT ],
+  [ '--list', '-l', GetoptLong::NO_ARGUMENT ],
+  [ '--time', '-t', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--query-types', '-q', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--verbose', '-v', GetoptLong::NO_ARGUMENT ]
+)
+
+config = { 
+  :list => true, 
+  :whitelist => [ 'root' ],
+  :query_types => [ 'select' ], 
+  :time => 180
+}
+
+begin
+  opts.each do |opt, arg|
+    case opt
+    when '--help'
+      RDoc::usage
+    when '--host'
+      config[:host] = arg
+    when '--user'
+      config[:user] = arg
+    when '--password'
+      config[:password] = arg
+    when '--list'
+      config[:list] = true
+    when '--kill'
+      config[:kill] = true
+    when '--time'
+      config[:time] = arg.to_i
+      raise GetoptLong::InvalidOption, "Invalid time value (should be > 1)" if config[:time] < 1
+    when '--whitelist'
+      config[:whitelist] += arg.split(/\s*,\s*/)
+      config[:whitelist].uniq!
+    when '--query-types'
+      config[:query_types] = arg.split(/\s*,\s*/)
+      config[:query_types].uniq!
+    when '--verbose'
+      @debug = true
+    end
+  end
+rescue GetoptLong::InvalidOption => e
+  puts "ERROR: #{e}"
+  RDoc::usage
+end
+debug "Config after parsing params: #{config.inspect}"
+
+#-------------------------------------------------------------------------------------------
+debug "Connecting to mysql..."
+db = MySQL.new(config)
+
+debug "Fetching processlist..."
+processlist = db.select_all("SHOW PROCESSLIST")
+
+debug "Analyzing processes..."
+processlist.each do |p|  
+  next if p['Command'] != 'Query'
+  next if p['Time'].to_i <= config[:time]
+  next if config[:whitelist].member?(p['User'])
+  next unless config[:query_types].member?(query_type(p['Info']))
+  
+  print_process(p)
+  kill_process(p['Id'].to_i, db) if config[:kill]
+  puts
+end

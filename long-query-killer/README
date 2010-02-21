@@ -1,0 +1,17 @@
+1) Running a long bad query in one console
+2) Running the script in another console:
+
+[16:39] $ ./long-query-killer -h blah.local -u killer -pblah -t 180 -k
+PROCESS 1861171:
+ - User: scribd_ro
+ - Host: 10.10.10.10:37602
+ - Database: blah_production
+ - Time: 193
+ - State: Sending data
+ - Query: select count(*) from word_documents
+KILLING PROCESS 1861171!
+
+3) Query is killed in the database console:
+
+mysql> select count(*) from word_documents;
+ERROR 1053 (08S01): Server shutdown in progress
