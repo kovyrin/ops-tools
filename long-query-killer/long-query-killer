@@ -22,6 +22,8 @@
 #   kill long queries
 # -t, --time:
 #   define long transactions max time in seconds (default: 90)
+# -o, --only-users:
+#   define users whose queries should be killed (comma-separated list, default: all users)
 # -w, --whitelist:
 #   define whitelisted users (comma-separated list, default: root)
 # -q, --query-types
@@ -44,6 +46,7 @@ class MySQL
     @user = config[:user] || 'root'
     @password = config[:password] || ''
     @database = config[:database] || 'mysql'
+    @silent_mode = config[:silent_mode]
     conn # connect
   end
 
@@ -71,10 +74,15 @@ private
       return @conn
     end
 
-    @conn = Mysql.new(@host, @user, @password, @database)
-    @conn.reconnect = true
+    begin
+      @conn = Mysql.new(@host, @user, @password, @database)
+      @conn.reconnect = true
+    rescue Mysql::Error
+      puts "Warning: Mysql is down, not killing any queries for now" unless @silent_mode
+      exit(0)
+    end
 
-    return @conn 
+    return @conn
   end
 end
 
@@ -118,7 +126,9 @@ opts = GetoptLong.new(
   [ '--list', '-l', GetoptLong::NO_ARGUMENT ],
   [ '--time', '-t', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--query-types', '-q', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--only-users', '-o', GetoptLong::REQUIRED_ARGUMENT ],
   [ '--whitelist', '-w', GetoptLong::REQUIRED_ARGUMENT ],
+  [ '--silent', '-s', GetoptLong::NO_ARGUMENT ],
   [ '--verbose', '-v', GetoptLong::NO_ARGUMENT ]
 )
 
@@ -147,12 +157,17 @@ begin
     when '--time'
       config[:time] = arg.to_i
       raise GetoptLong::InvalidOption, "Invalid time value (should be > 1)" if config[:time] < 1
+    when '--only-users'
+      config[:only] = arg.split(/\s*,\s*/)
+      config[:only].uniq!
     when '--whitelist'
       config[:whitelist] += arg.split(/\s*,\s*/)
       config[:whitelist].uniq!
     when '--query-types'
       config[:query_types] = arg.split(/\s*,\s*/)
       config[:query_types].uniq!
+    when '--silent'
+      config[:silent_mode] = true
     when '--verbose'
       @debug = true
     end
@@ -168,15 +183,17 @@ debug "Connecting to mysql..."
 db = MySQL.new(config)
 
 debug "Fetching processlist..."
-processlist = db.select_all("SHOW PROCESSLIST")
+processlist = db.select_all("SHOW FULL PROCESSLIST")
 
 debug "Analyzing processes..."
-processlist.each do |p|  
+processlist.each do |p|
   next if p['Command'] != 'Query'
+  next if p['State'] == 'User lock'
   next if p['Time'].to_i <= config[:time]
   next if config[:whitelist].member?(p['User'])
+  next if config[:only] && !config[:only].member?(p['User'])
   next unless config[:query_types].member?(query_type(p['Info']))
-  
+
   print_process(p)
   kill_process(p['Id'].to_i, db) if config[:kill]
   puts
